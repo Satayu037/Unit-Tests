@@ -5,4 +5,5 @@ uploads/
 *Postman*.json
 MoodLocationFinder_Postman_Collection.json
 MoodLocationFinder_API_Collection.json
-README.md
+README.mdcoverage/ 
+node_modules/ 

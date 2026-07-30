@@ -1,13 +1,15 @@
 // 📄 app.js
+require("dotenv").config();
+const path = require("path");
 const express = require("express");
 const cors = require("cors");
-const path = require("path");
-require("dotenv").config();
 
-// Import app จาก lib/socket (เพราะ socket ของคุณสร้าง app ไว้ในนั้น)
+// 1. ดึง Express app instance จาก lib/socket
 const { app } = require("./lib/socket");
 
-// Import Routes
+// ==========================================
+// 2. Import Routes
+// ==========================================
 const authRoutes = require("./routes/authRoutes");
 const placeRoutes = require("./routes/placeRoutes");
 const favoriteRoutes = require("./routes/favoriteRoutes");
@@ -19,38 +21,48 @@ const chatRoomRoutes = require("./routes/chatRoomRoutes");
 const aiSearchRoutes = require("./routes/aiSearchRoutes");
 const mapsRoutes = require("./routes/mapsRoutes");
 
-// CORS Configuration
+// ==========================================
+// 3. CORS Configuration
+// ==========================================
+const defaultOrigins = [
+  "http://localhost:5173",
+  "https://moodlocationproject.vercel.app",
+  "https://moodloca.vercel.app",
+];
+
 const allowedOrigins = process.env.CORS_ORIGIN
-  ? process.env.CORS_ORIGIN.split(",").map((origin) => origin.trim())
-  : [
-      "http://localhost:5173",
-      "https://moodlocationproject.vercel.app",
-      "https://moodloca.vercel.app",
-    ];
+  ? process.env.CORS_ORIGIN.split(",").map((origin) => origin.trim())
+  : defaultOrigins;
 
-app.use(
-  cors({
-    origin: function (origin, callback) {
-      if (!origin) return callback(null, true);
-      if (allowedOrigins.includes(origin)) {
-        return callback(null, true);
-      }
-      console.error("CORS Error: Origin not allowed:", origin);
-      return callback(new Error("Not allowed by CORS"));
-    },
-    credentials: true,
-    methods: ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
-    allowedHeaders: ["Content-Type", "Authorization", "X-Requested-With"],
-  }),
-);
+const corsOptions = {
+  origin: (origin, callback) => {
+    // อนุญาต request ที่ไม่มี origin (เช่น Mobile App, Postman, Same-origin)
+    if (!origin || allowedOrigins.includes(origin)) {
+      return callback(null, true);
+    }
+    console.error(`❌ CORS Rejection: Domain "${origin}" ไม่ได้รับอนุญาต`);
+    return callback(new Error("CORS_NOT_ALLOWED"));
+  },
+  credentials: true,
+  methods: ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
+  allowedHeaders: ["Content-Type", "Authorization", "X-Requested-With"],
+};
 
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
+app.use(cors(corsOptions));
 
-// Static files (สำหรับรูปภาพที่ upload)
+// ==========================================
+// 4. Body Parsers & Static Files
+// ==========================================
+// เพิ่ม limit ขนาด Payload เพื่อป้องกัน Request ขนาดใหญ่เกินไปกดดัน Server
+app.use(express.json({ limit: "10mb" }));
+app.use(express.urlencoded({ extended: true, limit: "10mb" }));
+
+// ให้บริการ Static files สำหรับรูปภาพที่อัปโหลด
 app.use("/uploads", express.static(path.join(__dirname, "uploads")));
 
-// ========== Routes (v1) ==========
+// ==========================================
+// 5. API Routes (v1)
+// ==========================================
 app.use("/api/v1/auth", authRoutes);
 app.use("/api/v1/places", placeRoutes);
 app.use("/api/v1/favorites", favoriteRoutes);
@@ -62,35 +74,66 @@ app.use("/api/v1/contact", chatRoomRoutes);
 app.use("/api/v1/ai", aiSearchRoutes);
 app.use("/api/v1/maps", mapsRoutes);
 
-// Health check
+// ==========================================
+// 6. Health Check Endpoint
+// ==========================================
 app.get("/", (req, res) => {
-  res.json({
-    message: "🎭 เซิฟเวอณ์ของหลังบ้านทำงานแล้ว!",
-  });
+  res.status(200).json({
+    success: true,
+    message: "🎭 เซิร์ฟเวอร์หลังบ้านทำงานปกติ!",
+    timestamp: new Date().toISOString(),
+  });
 });
 
-// Error handling middleware
-app.use((err, req, res, next) => {
-  console.error("Server Error:", err);
-
-  if (err.code === "LIMIT_FILE_SIZE") {
-    return res.status(400).json({
-      message: "ไฟล์รูปต้องไม่เกิน 2MB",
-      detail: `ไฟล์ของคุณมีขนาดเกินกำหนด กรุณาลองย่อรูปก่อน`,
-    });
-  }
-
-  if (err.message && err.message.includes("อนุญาตเฉพาะไฟล์รูปภาพ")) {
-    return res.status(400).json({ message: err.message });
-  }
-
-  res.status(500).json({ message: "เกิดข้อผิดพลาดภายในเซิร์ฟเวอร์" });
-});
-
-// 404 handler
+// ==========================================
+// 7. Global 404 Handler (สำหรับ Route ที่ไม่มีอยู่จริง)
+// ==========================================
 app.use((req, res) => {
-  res.status(404).json({ message: "ไม่พบ API endpoint ที่ร้องขอ" });
+  res.status(404).json({
+    success: false,
+    message: "ไม่พบ API endpoint ที่ร้องขอ",
+    path: req.originalUrl,
+  });
 });
 
-// ✅ Export เฉพาะตัว app ออกไปให้ไฟล์อื่นใช้งาน
+// ==========================================
+// 8. Global Error Handling Middleware
+// ==========================================
+app.use((err, req, res, next) => {
+  // 8.1 จัดการกรณีติด CORS Policy
+  if (err.message === "CORS_NOT_ALLOWED") {
+    return res.status(403).json({
+      success: false,
+      message: "ไม่อนุญาตให้เข้าถึงเนื่องจากติดนโยบาย CORS",
+    });
+  }
+
+  // 8.2 จัดการ Error จาก Multer (ขนาดไฟล์เกิน 2MB)
+  if (err.code === "LIMIT_FILE_SIZE") {
+    return res.status(400).json({
+      success: false,
+      message: "ไฟล์รูปต้องมีขนาดไม่เกิน 2MB",
+      detail: "ไฟล์ของคุณมีขนาดเกินกำหนด กรุณาย่อขนาดรูปภาพก่อนอัปโหลดอีกครั้ง",
+    });
+  }
+
+  // 8.3 จัดการ Error ประเภทไฟล์รูปภาพไม่ถูกต้อง
+  if (err.message && err.message.includes("อนุญาตเฉพาะไฟล์รูปภาพ")) {
+    return res.status(400).json({
+      success: false,
+      message: err.message,
+    });
+  }
+
+  // 8.4 Log และตอบกลับกรณีเป็น Internal Server Error (500)
+  console.error("🔥 Server Error Stack:", err);
+
+  return res.status(500).json({
+    success: false,
+    message: "เกิดข้อผิดพลาดภายในเซิร์ฟเวอร์",
+    ...(process.env.NODE_ENV === "development" && { error: err.message }),
+  });
+});
+
+
 module.exports = app;
